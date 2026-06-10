@@ -1,39 +1,25 @@
-PIN_CONFIG = {
-    'OLED_SCL': 5,
-    'OLED_SDA': 4,
-    'BUTTON': 2,
-    'DHT': 14,
-    'TRIG': 12,
-    'ECHO': 13,
-    'RELAY': 16,
-}
+# Pin config: SCL, SDA, BUTTON, DHT, TRIG, ECHO, RELAY
+PINS = (5, 4, 2, 14, 12, 13, 16)
 
-MQTT_CONFIG = {
-    'server': '103.210.35.166',
-    'port': 1883,
-    'user': 'mqtt',
-    'password': 'mqtt',
-    'topics': {
-        'status': 'fauzan/status',
-        'mode': 'fauzan/mode',
-        'relay': 'fauzan/relay',
-    }
-}
+# MQTT: server, port, user, pass
+MQTT_CFG = ('103.210.35.166', 1883, 'mqtt', 'mqtt')
 
-TIMING = {
-    'publish_interval': 60000,
-    'dht_interval': 2000,
-    'dist_interval': 1000,
-    'notification_duration': 2000,
-}
+# Topics
+T_STATUS = 'fauzan/status'
+T_MODE = 'fauzan/mode'
+T_RELAY = 'fauzan/relay'
 
-THRESHOLDS = {
-    'distance_min': 10.0,
-    'distance_max': 20.0,
-}
+# Timing (ms)
+T_PUB = 15000
+T_DHT = 2000
+T_DIST = 1000
+T_NOTIF = 2000
 
-DISPLAY_CONFIG = {
-    'width': 128,
-    'height': 64,
-    'i2c_address': 0x3C,
-}
+# Thresholds (cm)
+D_MIN = 10.0
+D_MAX = 20.0
+
+# Display
+D_W = 128
+D_H = 64
+D_ADDR = 0x3C

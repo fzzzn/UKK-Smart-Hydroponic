@@ -3,84 +3,64 @@ import ujson
 import time
 import ubinascii
 
-class MQTTClientWrapper:
-    def __init__(self, config, callback):
-        self.config = config
-        self.callback = callback
-        self.client = None
-        self.last_reconnect_attempt = 0
-        self.reconnect_interval = 5000
+class MQTT:
+    def __init__(self, cfg, cb):
+        self.cfg = cfg
+        self.cb = cb
+        self.c = None
+        self.ok = False
+        self.lr = 0
+        self.lp = 0
 
     def connect(self):
-        client_id = 'Fauzan-Hydroponic-' + ubinascii.hexlify(self.config['server'].encode())[:8].decode()
-
         try:
-            self.client = MQTTClient(
-                client_id,
-                self.config['server'],
-                port=self.config['port'],
-                user=self.config['user'],
-                password=self.config['password'],
-                keepalive=60
-            )
-            self.client.set_callback(self._on_message)
-            self.client.connect()
-            self._subscribe_topics()
-            print("MQTT connected")
+            cid = 'H-' + ubinascii.hexlify(self.cfg[0].encode())[:6].decode()
+            self.c = MQTTClient(cid, self.cfg[0], self.cfg[1], self.cfg[2], self.cfg[3], keepalive=60)
+            self.c.set_callback(self._msg)
+            self.c.connect()
+            self.c.subscribe('fauzan/mode')
+            self.c.subscribe('fauzan/relay')
+            self.ok = True
+            self.lp = time.ticks_ms()
             return True
         except Exception as e:
-            print("MQTT connect error:", e)
+            print("MQTT err:", e)
+            self.ok = False
             return False
 
-    def _subscribe_topics(self):
-        topics = self.config['topics']
-        self.client.subscribe(topics['mode'])
-        self.client.subscribe(topics['relay'])
+    def _msg(self, t, m):
+        self.cb(t.decode(), m.decode().lower())
 
-    def _on_message(self, topic, msg):
-        topic_str = topic.decode('utf-8')
-        message = msg.decode('utf-8').lower()
-        self.callback(topic_str, message)
-
-    def is_connected(self):
-        if self.client is None:
-            return False
+    def check(self):
+        if not self.ok:
+            return
         try:
-            self.client.ping()
-            return True
+            self.c.check_msg()
+            n = time.ticks_ms()
+            if time.ticks_diff(n, self.lp) > 30000:
+                self.c.ping()
+                self.lp = n
         except:
-            return False
+            self.ok = False
 
     def reconnect(self):
-        current_time = time.ticks_ms()
-        if time.ticks_diff(current_time, self.last_reconnect_attempt) < self.reconnect_interval:
+        n = time.ticks_ms()
+        if time.ticks_diff(n, self.lr) < 5000:
             return False
-
-        self.last_reconnect_attempt = current_time
-        print("Attempting MQTT reconnect...")
-
+        self.lr = n
         try:
-            self.client.disconnect()
+            if self.c:
+                self.c.disconnect()
         except:
             pass
-
+        self.c = None
+        self.ok = False
         return self.connect()
 
-    def check_msg(self):
-        if self.is_connected():
-            try:
-                self.client.check_msg()
-            except Exception as e:
-                print("MQTT check_msg error:", e)
-
-    def publish_status(self, data):
-        if not self.is_connected():
-            return False
-
+    def pub(self, data):
+        if not self.ok:
+            return
         try:
-            payload = ujson.dumps(data)
-            self.client.publish(self.config['topics']['status'], payload)
-            return True
-        except Exception as e:
-            print("MQTT publish error:", e)
-            return False
+            self.c.publish('fauzan/status', ujson.dumps(data))
+        except:
+            self.ok = False

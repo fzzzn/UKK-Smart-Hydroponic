@@ -1,123 +1,110 @@
 import time
+import gc
 from machine import Pin
-from config import PIN_CONFIG, MQTT_CONFIG, TIMING, THRESHOLDS, DISPLAY_CONFIG
+from config import *
 from wifi_manager import WiFiManager
-from sensors import DHTSensor, UltrasonicSensor
+from sensors import DHTSensor, Ultrasonic
 from display import Display
-from mqtt_client import MQTTClientWrapper
-from hydroponic import HydroponicSystem
+from mqtt_client import MQTT
+from hydroponic import Hydro
 
-wifi_manager = WiFiManager()
+gc.collect()
+gc.threshold(8000)
 
-if not wifi_manager.is_configured():
-    print("No WiFi config found, starting captive portal...")
-    wifi_manager.start_captive_portal()
-else:
-    print("Connecting to saved WiFi...")
-    if not wifi_manager.connect_saved():
-        print("Failed to connect, starting captive portal...")
-        wifi_manager.start_captive_portal()
+disp = Display(PINS[0], PINS[1], D_W, D_H, D_ADDR)
+disp.loading("WiFi...")
 
-button = Pin(PIN_CONFIG['BUTTON'], Pin.IN)
-last_button_state = 0
+wm = WiFiManager()
+if not wm.is_configured():
+    disp.loading("AP Mode")
+    wm.start_captive_portal()
+elif not wm.connect_saved():
+    disp.loading("AP Mode")
+    wm.start_captive_portal()
 
-dht_sensor = DHTSensor(PIN_CONFIG['DHT'])
-ultrasonic = UltrasonicSensor(PIN_CONFIG['TRIG'], PIN_CONFIG['ECHO'])
+disp.loading("MQTT...")
 
-display = Display(
-    PIN_CONFIG['OLED_SCL'],
-    PIN_CONFIG['OLED_SDA'],
-    DISPLAY_CONFIG['width'],
-    DISPLAY_CONFIG['height'],
-    DISPLAY_CONFIG['i2c_address']
-)
+btn = Pin(PINS[2], Pin.IN)
+btn_last = btn.value()
 
-hydro_config = {
-    'relay_pin': PIN_CONFIG['RELAY'],
-    'thresholds': THRESHOLDS,
-}
-hydro = HydroponicSystem(hydro_config)
+dht = DHTSensor(PINS[3])
+us = Ultrasonic(PINS[4], PINS[5])
 
-def mqtt_callback(topic, message):
-    topics = MQTT_CONFIG['topics']
+hydro = Hydro(PINS[6], D_MIN, D_MAX)
 
-    if topic == topics['mode']:
-        old_mode = hydro.is_auto_mode
-        hydro.set_mode(message)
-        if old_mode != hydro.is_auto_mode:
-            mode_text = "  TO AUTO" if hydro.is_auto_mode else " TO MANUAL"
-            display.trigger_notification(" MODE CHANGED ", mode_text)
+def mqtt_cb(topic, msg):
+    if topic == T_MODE:
+        old = hydro.auto
+        hydro.auto = msg == 'auto'
+        if old != hydro.auto:
+            disp.notif_show("MODE CHANGED", "TO AUTO" if hydro.auto else "TO MANUAL")
+    elif topic == T_RELAY and not hydro.auto:
+        if msg == 'on':
+            hydro.set_r(True)
+        elif msg == 'off':
+            hydro.set_r(False)
+    hydro.logic()
+    upd()
 
-    elif topic == topics['relay'] and not hydro.is_auto_mode:
-        old_relay = hydro.relay_state
-        if message == 'on':
-            hydro.set_relay(True)
-        elif message == 'off':
-            hydro.set_relay(False)
-        if old_relay != hydro.relay_state:
-            pump_text = "   TO ON" if hydro.relay_state else "   TO OFF"
-            display.trigger_notification(" PUMP CHANGED ", pump_text)
-
-    hydro.run_logic()
-    update_display()
-
-mqtt = MQTTClientWrapper(MQTT_CONFIG, mqtt_callback)
+mqtt = MQTT(MQTT_CFG, mqtt_cb)
 mqtt.connect()
 
-last_publish = 0
-last_dht = 0
-last_dist = 0
+t_pub = 0
+t_dht = 0
+t_dist = 0
+lc = 0
 
-def update_display():
-    state = hydro.get_state()
-    state['wifi'] = wifi_manager.sta.isconnected()
-    state['mqtt'] = mqtt.is_connected()
-    state['interval'] = TIMING['publish_interval'] // 1000
-    display.render(state)
+def upd():
+    s = hydro.state()
+    s['w'] = wm.sta.isconnected()
+    s['m'] = mqtt.ok
+    s['i'] = T_PUB // 1000
+    disp.render(s)
 
-def handle_button():
-    global last_button_state
-    current = button.value()
-    if current == 1 and last_button_state == 0:
-        display.toggle_page()
-        update_display()
-        time.sleep_ms(250)
-    last_button_state = current
-
-print("System ready!")
-update_display()
+print("Ready!")
+disp.page = 0
+upd()
 
 while True:
-    if not mqtt.is_connected():
-        mqtt.reconnect()
+    try:
+        if not mqtt.ok:
+            mqtt.reconnect()
+        mqtt.check()
 
-    mqtt.check_msg()
-    handle_button()
+        b = btn.value()
+        if b == 1 and btn_last == 0:
+            disp.toggle()
+            upd()
+            time.sleep_ms(250)
+        btn_last = b
 
-    now = time.ticks_ms()
+        n = time.ticks_ms()
 
-    if display.check_notification(TIMING['notification_duration']):
-        update_display()
+        if disp.notif_check(T_NOTIF):
+            upd()
 
-    if time.ticks_diff(now, last_dist) >= TIMING['dist_interval']:
-        last_dist = now
-        dist = ultrasonic.read()
-        hydro.update_sensors(hydro.temperature, hydro.humidity, dist)
-        changed = hydro.run_logic()
-        if changed:
-            pump_text = "   TO ON" if hydro.relay_state else "   TO OFF"
-            display.trigger_notification(" PUMP CHANGED ", pump_text)
-        update_display()
+        if time.ticks_diff(n, t_dist) >= T_DIST:
+            t_dist = n
+            hydro.d = us.read()
+            hydro.logic()
+            upd()
 
-    if time.ticks_diff(now, last_dht) >= TIMING['dht_interval']:
-        last_dht = now
-        temp, hum = dht_sensor.read()
-        hydro.update_sensors(temp, hum, hydro.distance)
-        update_display()
+        if time.ticks_diff(n, t_dht) >= T_DHT:
+            t_dht = n
+            hydro.t, hydro.h = dht.read()
+            upd()
 
-    if time.ticks_diff(now, last_publish) >= TIMING['publish_interval']:
-        last_publish = now
-        payload = hydro.get_mqtt_payload()
-        mqtt.publish_status(payload)
+        if time.ticks_diff(n, t_pub) >= T_PUB:
+            t_pub = n
+            mqtt.pub(hydro.payload())
 
-    time.sleep_ms(10)
+        lc += 1
+        if lc >= 50:
+            gc.collect()
+            lc = 0
+
+        time.sleep_ms(10)
+    except Exception as e:
+        print("Err:", e)
+        gc.collect()
+        time.sleep_ms(500)

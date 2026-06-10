@@ -4,25 +4,25 @@ from machine import Pin
 
 class DHTSensor:
     def __init__(self, pin):
-        self.sensor = dht.DHT22(Pin(pin))
-        self.temperature = 0.0
-        self.humidity = 0.0
+        self.s = dht.DHT22(Pin(pin))
+        self.t = 0.0
+        self.h = 0.0
 
     def read(self):
         try:
-            self.sensor.measure()
-            self.temperature = self.sensor.temperature()
-            self.humidity = self.sensor.humidity()
-        except OSError as e:
-            print("DHT read error:", e)
-        return self.temperature, self.humidity
+            self.s.measure()
+            self.t = self.s.temperature()
+            self.h = self.s.humidity()
+        except:
+            pass
+        return self.t, self.h
 
-class UltrasonicSensor:
-    def __init__(self, trig_pin, echo_pin):
-        self.trig = Pin(trig_pin, Pin.OUT)
-        self.echo = Pin(echo_pin, Pin.IN)
+class Ultrasonic:
+    def __init__(self, trig, echo):
+        self.trig = Pin(trig, Pin.OUT)
+        self.echo = Pin(echo, Pin.IN)
         self.trig.value(0)
-        self.distance = 0.0
+        self.d = 0.0
 
     def read(self):
         self.trig.value(0)
@@ -30,27 +30,18 @@ class UltrasonicSensor:
         self.trig.value(1)
         time.sleep_us(10)
         self.trig.value(0)
-
-        pulse_time = self._pulse_in(30000)
-
-        if pulse_time == 0:
-            self.distance = -1
-        else:
-            self.distance = pulse_time * 0.0343 / 2
-
-        return self.distance
-
-    def _pulse_in(self, timeout_us):
-        start = time.ticks_us()
-
-        while self.echo.value() == 0:
-            if time.ticks_diff(time.ticks_us(), start) > timeout_us:
-                return 0
-
-        pulse_start = time.ticks_us()
-
-        while self.echo.value() == 1:
-            if time.ticks_diff(time.ticks_us(), pulse_start) > timeout_us:
-                return 0
-
-        return time.ticks_diff(time.ticks_us(), pulse_start)
+        
+        t = time.ticks_us()
+        while not self.echo.value():
+            if time.ticks_diff(time.ticks_us(), t) > 30000:
+                self.d = -1
+                return self.d
+        
+        s = time.ticks_us()
+        while self.echo.value():
+            if time.ticks_diff(time.ticks_us(), s) > 30000:
+                self.d = -1
+                return self.d
+        
+        self.d = time.ticks_diff(time.ticks_us(), s) * 0.0343 / 2
+        return self.d

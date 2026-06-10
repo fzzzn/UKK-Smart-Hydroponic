@@ -2,11 +2,9 @@ import network
 import socket
 import json
 import time
-from machine import Pin
 
-WIFI_CONFIG_FILE = 'wifi_config.json'
-AP_SSID = 'Fauzan Smart Hydroponic'
-AP_PASSWORD = None
+F = 'wifi_config.json'
+AP_SSID = 'Fauzan Hydro'
 
 class WiFiManager:
     def __init__(self):
@@ -15,158 +13,124 @@ class WiFiManager:
 
     def is_configured(self):
         try:
-            with open(WIFI_CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                return 'ssid' in config and 'password' in config
+            with open(F) as f:
+                c = json.load(f)
+                return 'ssid' in c
         except:
             return False
 
-    def get_saved_credentials(self):
+    def get_creds(self):
         try:
-            with open(WIFI_CONFIG_FILE, 'r') as f:
+            with open(F) as f:
                 return json.load(f)
         except:
             return None
 
-    def save_credentials(self, ssid, password):
-        with open(WIFI_CONFIG_FILE, 'w') as f:
-            json.dump({'ssid': ssid, 'password': password}, f)
+    def save(self, ssid, pwd):
+        with open(F, 'w') as f:
+            json.dump({'ssid': ssid, 'password': pwd}, f)
 
     def connect_saved(self, timeout=15):
-        if not self.is_configured():
+        c = self.get_creds()
+        if not c:
             return False
-
-        creds = self.get_saved_credentials()
-        if not creds:
-            return False
-
+        print("WiFi:", c['ssid'])
+        if self.sta.isconnected():
+            return True
         self.sta.active(True)
-        self.sta.connect(creds['ssid'], creds['password'])
-
-        start = time.time()
+        self.sta.connect(c['ssid'], c.get('password', ''))
+        t = time.time()
         while not self.sta.isconnected():
-            if time.time() - start > timeout:
-                print("WiFi connection timeout")
+            if time.time() - t > timeout:
+                self.sta.active(False)
                 return False
             time.sleep(0.5)
-
-        print("WiFi connected:", self.sta.ifconfig())
+        print("IP:", self.sta.ifconfig()[0])
         return True
 
     def start_ap(self):
         self.ap.active(True)
-        if AP_PASSWORD:
-            self.ap.config(ssid=AP_SSID, password=AP_PASSWORD, authmode=network.AUTH_WPA2_PSK)
-        else:
-            self.ap.config(ssid=AP_SSID, authmode=network.AUTH_OPEN)
-
-        while not self.ap.active():
-            time.sleep(0.5)
-
-        print("AP started:", AP_SSID)
+        time.sleep(1)
+        self.ap.config(ssid=AP_SSID, authmode=network.AUTH_OPEN)
+        time.sleep(2)
+        print("AP:", AP_SSID)
         print("IP:", self.ap.ifconfig()[0])
-
-    def stop_ap(self):
-        self.ap.active(False)
 
     def start_captive_portal(self):
         self.start_ap()
-        self._run_web_server()
-
-    def _run_web_server(self):
-        addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
         s = socket.socket()
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(addr)
+        s.bind(('0.0.0.0', 80))
         s.listen(1)
-        print("Web server listening on port 80")
-
+        print("Web:80")
         while True:
-            cl, addr = s.accept()
+            c, a = s.accept()
             try:
-                request = cl.recv(1024).decode('utf-8')
-
-                if 'POST /save' in request:
-                    self._handle_save(cl, request)
+                c.settimeout(5)
+                r = b''
+                while True:
+                    d = c.recv(256)
+                    if not d:
+                        break
+                    r += d
+                    if b'\r\n\r\n' in r:
+                        h = r.find(b'\r\n\r\n')
+                        cl = 0
+                        for l in r[:h].decode().split('\r\n'):
+                            if l.lower().startswith('content-length:'):
+                                cl = int(l.split(':')[1])
+                                break
+                        if len(r) - h - 4 >= cl:
+                            break
+                rs = r.decode()
+                if 'POST /save' in rs:
+                    self._save(c, rs[rs.find('\r\n\r\n')+4:])
                 else:
-                    self._send_config_page(cl)
+                    self._page(c)
             except Exception as e:
-                print("Web server error:", e)
+                print("Web err:", e)
             finally:
-                cl.close()
+                try:
+                    c.close()
+                except:
+                    pass
 
-    def _handle_save(self, cl, request):
-        lines = request.split('\r\n')
-        for line in lines:
-            if line.startswith('ssid='):
-                data = line.split('HTTP')[0]
-                params = {}
-                for pair in data.split('&'):
-                    if '=' in pair:
-                        key, val = pair.split('=', 1)
-                        params[key] = val.replace('+', ' ')
+    def _save(self, c, body):
+        p = {}
+        for x in body.split('&'):
+            if '=' in x:
+                k, v = x.split('=', 1)
+                p[k] = self._dec(v)
+        ssid = p.get('ssid', '')
+        if ssid:
+            self.save(ssid, p.get('password', ''))
+            c.send('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n')
+            c.send('<html><body style="background:#1a1a2e;color:#eee;text-align:center;padding:50px"><h1 style="color:#00d4aa">Saved!</h1><p>Rebooting...</p></body></html>')
+            time.sleep(2)
+            import machine
+            machine.reset()
+        else:
+            c.send('HTTP/1.1 400 Bad Request\r\n\r\n')
 
-                ssid = params.get('ssid', '')
-                password = params.get('password', '')
+    def _page(self, c):
+        c.send('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n')
+        c.send('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiFi</title><style>body{font-family:Arial;text-align:center;padding:20px;background:#1a1a2e;color:#eee}h1{color:#00d4aa}form{max-width:300px;margin:0 auto}input[type=text],input[type=password]{width:100%;padding:12px;margin:8px 0;border:1px solid #333;border-radius:5px;box-sizing:border-box;background:#16213e;color:#eee}input[type=submit]{width:100%;padding:15px;background:#00d4aa;color:#000;border:none;border-radius:5px;font-size:18px;font-weight:bold;cursor:pointer;margin-top:15px}</style></head><body><h1>Smart Hydroponic</h1><h2>WiFi Setup</h2><form method="POST" action="/save"><input type="text" name="ssid" placeholder="WiFi SSID" required><br><input type="password" name="password" placeholder="Password"><br><input type="submit" value="SAVE AND CONNECT"></form></body></html>')
 
-                if ssid:
-                    self.save_credentials(ssid, password)
-                    response = self._success_page()
-                else:
-                    response = self._error_page()
-
-                cl.send('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n')
-                cl.send(response)
-                time.sleep(2)
-                import machine
-                machine.reset()
-                return
-
-        cl.send('HTTP/1.1 400 Bad Request\r\n\r\n')
-
-    def _send_config_page(self, cl):
-        html = '''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Smart Hydroponic - WiFi Setup</title>
-    <style>
-        body { font-family: Arial; text-align: center; padding: 20px; background: #1a1a2e; color: #eee; }
-        h1 { color: #00d4aa; }
-        form { max-width: 300px; margin: 0 auto; }
-        input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #333; border-radius: 5px; box-sizing: border-box; background: #16213e; color: #eee; }
-        button { width: 100%; padding: 12px; background: #00d4aa; color: #000; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; }
-        button:hover { background: #00b894; }
-    </style>
-</head>
-<body>
-    <h1>Smart Hydroponic</h1>
-    <h2>WiFi Configuration</h2>
-    <form method="POST" action="/save">
-        <input type="text" name="ssid" placeholder="WiFi SSID" required>
-        <input type="password" name="password" placeholder="WiFi Password">
-        <button type="submit">Save & Connect</button>
-    </form>
-</body>
-</html>'''
-        cl.send('HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n')
-        cl.send(html)
-
-    def _success_page(self):
-        return '''<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>Saved</title>
-<style>body{font-family:Arial;text-align:center;padding:50px;background:#1a1a2e;color:#eee;}h1{color:#00d4aa;}</style>
-</head>
-<body><h1>WiFi Saved!</h1><p>Reconnecting...</p></body>
-</html>'''
-
-    def _error_page(self):
-        return '''<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>Error</title>
-<style>body{font-family:Arial;text-align:center;padding:50px;background:#1a1a2e;color:#eee;}h1{color:#ff6b6b;}</style>
-</head>
-<body><h1>Error</h1><p>Invalid SSID</p><a href="/">Try Again</a></body>
-</html>'''
+    def _dec(self, s):
+        r = ''
+        i = 0
+        while i < len(s):
+            if s[i] == '+':
+                r += ' '
+                i += 1
+            elif s[i] == '%' and i + 2 < len(s):
+                try:
+                    r += chr(int(s[i+1:i+3], 16))
+                    i += 3
+                except:
+                    r += s[i]
+                    i += 1
+            else:
+                r += s[i]
+                i += 1
+        return r
