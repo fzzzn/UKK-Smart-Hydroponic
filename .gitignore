@@ -1,0 +1,17 @@
+# Environment variables (secrets)
+.env
+.env.*
+
+# MicroPython
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
